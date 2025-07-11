@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 import 'package:dropdown_button2/dropdown_button2.dart';
+import 'database_helper.dart'; // Make sure this import is correct
 
 void main() {
   runApp(CalendarPlannerApp());
@@ -24,11 +25,9 @@ class _CalendarPlannerAppState extends State<CalendarPlannerApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Custom Events Demo',
-      theme:
-          ThemeData(primarySwatch: Colors.blue, brightness: Brightness.light),
-      darkTheme:
-          ThemeData(brightness: Brightness.dark, primarySwatch: Colors.blue),
+      title: 'Calendar Planner',
+      theme: ThemeData(primarySwatch: Colors.blue, brightness: Brightness.light),
+      darkTheme: ThemeData(brightness: Brightness.dark, primarySwatch: Colors.blue),
       themeMode: _themeMode,
       home: CalendarHomePage(
         themeMode: _themeMode,
@@ -39,6 +38,7 @@ class _CalendarPlannerAppState extends State<CalendarPlannerApp> {
 }
 
 class MyEvent {
+  int? id;
   String title;
   DateTime start;
   DateTime end;
@@ -48,6 +48,7 @@ class MyEvent {
   bool isDeleted;
 
   MyEvent({
+    this.id,
     required this.title,
     required this.start,
     required this.end,
@@ -58,6 +59,7 @@ class MyEvent {
   });
 
   MyEvent copyWith({
+    int? id,
     String? title,
     DateTime? start,
     DateTime? end,
@@ -67,6 +69,7 @@ class MyEvent {
     bool? isDeleted,
   }) {
     return MyEvent(
+      id: id ?? this.id,
       title: title ?? this.title,
       start: start ?? this.start,
       end: end ?? this.end,
@@ -95,46 +98,36 @@ class CalendarHomePage extends StatefulWidget {
 }
 
 class _CalendarHomePageState extends State<CalendarHomePage> {
-  final List<MyEvent> _myEvents = [
-    MyEvent(
-      title: 'Meeting',
-      start: DateTime.utc(2024, 7, 12, 10),
-      end: DateTime.utc(2024, 7, 12, 11),
-      color: Colors.blue,
-      location: 'Conference Room',
-      description: 'Discuss project status',
-    ),
-    MyEvent(
-      title: 'Workout',
-      start: DateTime.utc(2024, 7, 12, 13),
-      end: DateTime.utc(2024, 7, 12, 14),
-      color: Colors.orange,
-      location: 'Gym',
-      description: 'Cardio session',
-    ),
-    MyEvent(
-      title: 'Doctor Appointment',
-      start: DateTime.utc(2024, 7, 13, 9),
-      end: DateTime.utc(2024, 7, 13, 10),
-      color: Colors.red,
-      location: 'Clinic',
-      description: 'Routine check-up',
-    ),
-  ];
+  final DatabaseHelper dbHelper = DatabaseHelper();
+  List<MyEvent> _myEvents = [];
 
   CalendarFormat _calendarFormat = CalendarFormat.week;
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
 
-  List<MyEvent> get _activeEvents =>
-      _myEvents.where((e) => !e.isDeleted).toList();
+  List<MyEvent> get _activeEvents => _myEvents.where((e) => !e.isDeleted).toList();
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedDay = _focusedDay;
+    _loadEvents();
+  }
+
+  Future<void> _loadEvents() async {
+    // Load ALL events, not just active, so trash works
+    final events = await dbHelper.getAllEvents();
+    setState(() {
+      _myEvents = events;
+    });
+  }
 
   List<MyEvent> _getEventsForDay(DateTime day) {
     return _activeEvents
         .where((event) =>
-            event.start.year == day.year &&
-            event.start.month == day.month &&
-            event.start.day == day.day)
+    event.start.year == day.year &&
+        event.start.month == day.month &&
+        event.start.day == day.day)
         .toList();
   }
 
@@ -161,21 +154,39 @@ class _CalendarHomePageState extends State<CalendarHomePage> {
       ),
     );
     if (result != null) {
-      setState(() {
-        if (isEditing) {
-          final idx = _myEvents.indexOf(event!);
-          if (idx != -1) _myEvents[idx] = result;
+      if (isEditing) {
+        if (result.isDeleted) {
+          // Update the event with all new values and set is_deleted = 1
+          await dbHelper.updateEvent(result.copyWith(id: event!.id, isDeleted: true));
         } else {
-          _myEvents.add(result);
+          await dbHelper.updateEvent(result.copyWith(id: event!.id));
         }
-      });
+      } else {
+        await dbHelper.insertEvent(result);
+      }
+      _loadEvents();
     }
   }
 
-  void _softDeleteEvent(MyEvent event) {
-    setState(() {
-      event.isDeleted = true;
-    });
+  void _softDeleteEvent(MyEvent event) async {
+    if (event.id != null) {
+      await dbHelper.softDeleteEvent(event.id!);
+      _loadEvents();
+    }
+  }
+
+  void _restoreEvent(MyEvent event) async {
+    if (event.id != null) {
+      await dbHelper.restoreEvent(event.id!);
+      _loadEvents();
+    }
+  }
+
+  void _hardDeleteEvent(MyEvent event) async {
+    if (event.id != null) {
+      await dbHelper.hardDeleteEvent(event.id!);
+      _loadEvents();
+    }
   }
 
   void _openTrash() {
@@ -200,39 +211,35 @@ class _CalendarHomePageState extends State<CalendarHomePage> {
               if (deletedEvents.isEmpty)
                 Text('Trash is empty.', style: TextStyle(fontSize: 16)),
               ...deletedEvents.map((event) => ListTile(
-                    leading: CircleAvatar(backgroundColor: event.color),
-                    title: Text(event.title),
-                    subtitle: Text(
-                      '${_formatDateTime(event.start)} - ${_formatDateTime(event.end)}'
+                leading: CircleAvatar(backgroundColor: event.color),
+                title: Text(event.title),
+                subtitle: Text(
+                  '${_formatDateTime(event.start)} - ${_formatDateTime(event.end)}'
                       '${event.location.isNotEmpty ? '\n@ ${event.location}' : ''}'
                       '${event.description.isNotEmpty ? '\n${event.description}' : ''}',
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.restore, color: Colors.green),
+                      tooltip: 'Restore',
+                      onPressed: () {
+                        _restoreEvent(event);
+                        Navigator.pop(context);
+                      },
                     ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: Icon(Icons.restore, color: Colors.green),
-                          tooltip: 'Restore',
-                          onPressed: () {
-                            setState(() {
-                              event.isDeleted = false;
-                            });
-                            Navigator.pop(context);
-                          },
-                        ),
-                        IconButton(
-                          icon: Icon(Icons.delete_forever, color: Colors.red),
-                          tooltip: 'Delete Forever',
-                          onPressed: () {
-                            setState(() {
-                              _myEvents.remove(event);
-                            });
-                            Navigator.pop(context);
-                          },
-                        ),
-                      ],
+                    IconButton(
+                      icon: Icon(Icons.delete_forever, color: Colors.red),
+                      tooltip: 'Delete Forever',
+                      onPressed: () {
+                        _hardDeleteEvent(event);
+                        Navigator.pop(context);
+                      },
                     ),
-                  )),
+                  ],
+                ),
+              )),
               SizedBox(height: 16),
             ],
           ),
@@ -267,10 +274,10 @@ class _CalendarHomePageState extends State<CalendarHomePage> {
           title: Text(event.title),
           subtitle: Text(
             '${event.start.hour.toString().padLeft(2, '0')}:${event.start.minute.toString().padLeft(2, '0')}'
-            ' - '
-            '${event.end.hour.toString().padLeft(2, '0')}:${event.end.minute.toString().padLeft(2, '0')}'
-            '${event.location.isNotEmpty ? '\n@ ${event.location}' : ''}'
-            '${event.description.isNotEmpty ? '\n${event.description}' : ''}',
+                ' - '
+                '${event.end.hour.toString().padLeft(2, '0')}:${event.end.minute.toString().padLeft(2, '0')}'
+                '${event.location.isNotEmpty ? '\n@ ${event.location}' : ''}'
+                '${event.description.isNotEmpty ? '\n${event.description}' : ''}',
           ),
           onTap: () => _addOrEditEvent(event: event),
           trailing: IconButton(
@@ -281,12 +288,6 @@ class _CalendarHomePageState extends State<CalendarHomePage> {
         );
       },
     );
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _selectedDay = _focusedDay;
   }
 
   @override
@@ -424,7 +425,7 @@ class _CalendarHomePageState extends State<CalendarHomePage> {
                         width: 6,
                         height: 6,
                         margin:
-                            EdgeInsets.symmetric(horizontal: 1.0, vertical: 2),
+                        EdgeInsets.symmetric(horizontal: 1.0, vertical: 2),
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: event.color,
@@ -650,6 +651,7 @@ class _EventDialogState extends State<EventDialog> {
               Navigator.pop(
                 context,
                 MyEvent(
+                  id: widget.event?.id,
                   title: _titleController.text.trim(),
                   start: _start,
                   end: _end,

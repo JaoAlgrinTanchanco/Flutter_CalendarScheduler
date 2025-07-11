@@ -12,6 +12,8 @@ dependencies:
   table_calendar: ^3.2.0
   syncfusion_flutter_calendar: ^30.1.39
   dropdown_button2: ^2.3.9
+  sqflite: ^2.3.0
+  path: ^1.8.3
 
 dev_dependencies:
   flutter_test:
